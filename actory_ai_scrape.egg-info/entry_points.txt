@@ -1,0 +1,2 @@
+[console_scripts]
+actory-crawl = scraper.run:main
