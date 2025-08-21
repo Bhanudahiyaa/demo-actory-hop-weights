@@ -9,7 +9,20 @@ from crawl4ai.deep_crawling.bfs_strategy import BFSDeepCrawlStrategy
 from crawl4ai.async_configs import CrawlerRunConfig
 
 from .neo4j_client import Neo4jClient
-from .extractors import extract_buttons, extract_images_from_result_media
+from .extractors import (
+    extract_buttons, 
+    extract_images_from_result_media,
+    extract_all_dom_features,
+    extract_input_fields,
+    extract_textareas,
+    extract_links,
+    extract_images,
+    extract_stylesheets,
+    extract_scripts,
+    extract_fonts,
+    extract_forms,
+    extract_media_resources
+)
 
 
 def env_bool(value: str, default: bool = False) -> bool:
@@ -48,7 +61,10 @@ async def crawl_and_store(
             if neo4j:
                 neo4j.upsert_page(page_url)
 
-            # LINKS
+            # Extract all DOM features comprehensively
+            dom_features = extract_all_dom_features(result.html)
+            
+            # LINKS - Enhanced link extraction
             internal = (result.links or {}).get("internal", [])
             external = (result.links or {}).get("external", [])
             for link in internal + external:
@@ -65,18 +81,65 @@ async def crawl_and_store(
                     if neo4j:
                         neo4j.link_pages(page_url, href)
 
-            # BUTTONS
-            for button in extract_buttons(result.html):
-                if neo4j:
+            # Store all extracted DOM features in Neo4j
+            if neo4j:
+                # BUTTONS
+                for button in dom_features["buttons"]:
                     neo4j.add_button(page_url, button)
 
-            # IMAGES
-            for image in extract_images_from_result_media(result.media or {}):
-                src = image.get("src") or ""
-                if not src:
-                    continue
-                if neo4j:
-                    neo4j.add_image(page_url, src, image.get("alt", ""))
+                # INPUT FIELDS
+                for input_field in dom_features["inputs"]:
+                    neo4j.add_input_field(page_url, input_field)
+
+                # TEXTAREAS
+                for textarea in dom_features["textareas"]:
+                    neo4j.add_textarea(page_url, textarea)
+
+                # IMAGES (from DOM + media results)
+                for image in dom_features["images"]:
+                    src = image.get("src") or ""
+                    if src:
+                        neo4j.add_image(page_url, src, image.get("alt", ""))
+                
+                # Also add images from result media (legacy support)
+                for image in extract_images_from_result_media(result.media or {}):
+                    src = image.get("src") or ""
+                    if src:
+                        neo4j.add_image(page_url, src, image.get("alt", ""))
+
+                # STYLESHEETS
+                for stylesheet in dom_features["stylesheets"]:
+                    neo4j.add_stylesheet(page_url, stylesheet)
+
+                # SCRIPTS
+                for script in dom_features["scripts"]:
+                    neo4j.add_script(page_url, script)
+
+                # FONTS
+                for font in dom_features["fonts"]:
+                    neo4j.add_font(page_url, font)
+
+                # FORMS
+                for form in dom_features["forms"]:
+                    neo4j.add_form(page_url, form)
+
+                # MEDIA RESOURCES
+                for media in dom_features["media"]:
+                    neo4j.add_media_resource(page_url, media)
+
+            # Print summary for this page
+            print(f"📄 Processed: {page_url}")
+            print(f"   🔗 Links: {len(dom_features['links'])}")
+            print(f"   🔘 Buttons: {len(dom_features['buttons'])}")
+            print(f"   📝 Inputs: {len(dom_features['inputs'])}")
+            print(f"   📋 Textareas: {len(dom_features['textareas'])}")
+            print(f"   🖼️  Images: {len(dom_features['images'])}")
+            print(f"   🎨 Stylesheets: {len(dom_features['stylesheets'])}")
+            print(f"   📜 Scripts: {len(dom_features['scripts'])}")
+            print(f"   🔤 Fonts: {len(dom_features['fonts'])}")
+            print(f"   📋 Forms: {len(dom_features['forms'])}")
+            print(f"   🎵 Media: {len(dom_features['media'])}")
+            print()
 
 
 def main():
@@ -103,7 +166,7 @@ def main():
     neo4j_user = os.getenv("NEO4J_USER", "neo4j")
     neo4j_pwd = os.getenv("NEO4J_PASSWORD", "neo4j")
 
-    client: Optional[Neo4jClient] = None if args.dry_run else Neo4jClient(neo4j_uri, neo4j_user, neo4j_pwd)
+    client: Optional[Neo4jClient] = None if args.dry_run else Neo4jClient()
     try:
         asyncio.run(crawl_and_store(args.url, args.depth, args.max_pages, args.include_external, client))
     finally:

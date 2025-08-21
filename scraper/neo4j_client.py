@@ -1,13 +1,24 @@
+import os
+from dotenv import load_dotenv
 from neo4j import GraphDatabase
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
+
+load_dotenv()
 
 
 class Neo4jClient:
-    def __init__(self, uri: str, user: str, password: str):
+    def __init__(self):
+        uri = os.getenv("NEO4J_URI")
+        user = os.getenv("NEO4J_USER")
+        password = os.getenv("NEO4J_PASSWORD")  # change if your password differs
+
         self._driver = GraphDatabase.driver(uri, auth=(user, password))
 
     def close(self):
-        self._driver.close()
+        if self._driver:
+            self._driver.close()
+
+    # ---------------- Enhanced methods for comprehensive DOM features ---------------- #
 
     def upsert_page(self, url: str):
         with self._driver.session() as session:
@@ -32,9 +43,160 @@ class Neo4jClient:
                 button.get("type", ""),
             )
 
+    def add_input_field(self, page_url: str, input_data: Dict[str, Any]):
+        with self._driver.session() as session:
+            session.execute_write(
+                self._merge_input_field,
+                page_url,
+                input_data.get("id", ""),
+                input_data.get("name", ""),
+                input_data.get("type", ""),
+                input_data.get("placeholder", ""),
+                input_data.get("required", False),
+                input_data.get("value", ""),
+            )
+
+    def add_textarea(self, page_url: str, textarea_data: Dict[str, Any]):
+        with self._driver.session() as session:
+            session.execute_write(
+                self._merge_textarea,
+                page_url,
+                textarea_data.get("id", ""),
+                textarea_data.get("name", ""),
+                textarea_data.get("placeholder", ""),
+                textarea_data.get("rows", ""),
+                textarea_data.get("cols", ""),
+                textarea_data.get("required", False),
+            )
+
     def add_image(self, page_url: str, src: str, alt: Optional[str]):
         with self._driver.session() as session:
             session.execute_write(self._merge_image, page_url, src, alt or "")
+
+    def add_stylesheet(self, page_url: str, stylesheet_data: Dict[str, Any]):
+        with self._driver.session() as session:
+            session.execute_write(
+                self._merge_stylesheet,
+                page_url,
+                stylesheet_data.get("url", ""),
+                stylesheet_data.get("type", ""),
+                stylesheet_data.get("media", ""),
+                stylesheet_data.get("integrity", ""),
+                stylesheet_data.get("crossorigin", ""),
+                stylesheet_data.get("content", ""),
+            )
+
+    def add_script(self, page_url: str, script_data: Dict[str, Any]):
+        with self._driver.session() as session:
+            session.execute_write(
+                self._merge_script,
+                page_url,
+                script_data.get("url", ""),
+                script_data.get("type", ""),
+                script_data.get("async", False),
+                script_data.get("defer", False),
+                script_data.get("integrity", ""),
+                script_data.get("crossorigin", ""),
+                script_data.get("content", ""),
+            )
+
+    def add_font(self, page_url: str, font_data: Dict[str, Any]):
+        with self._driver.session() as session:
+            session.execute_write(
+                self._merge_font,
+                page_url,
+                font_data.get("url", ""),
+                font_data.get("type", ""),
+                font_data.get("format", ""),
+                font_data.get("crossorigin", ""),
+            )
+
+    def add_form(self, page_url: str, form_data: Dict[str, Any]):
+        with self._driver.session() as session:
+            session.execute_write(
+                self._merge_form,
+                page_url,
+                form_data.get("id", ""),
+                form_data.get("name", ""),
+                form_data.get("action", ""),
+                form_data.get("method", ""),
+                form_data.get("enctype", ""),
+                form_data.get("target", ""),
+            )
+
+    def add_media_resource(self, page_url: str, media_data: Dict[str, Any]):
+        with self._driver.session() as session:
+            session.execute_write(
+                self._merge_media_resource,
+                page_url,
+                media_data.get("url", ""),
+                media_data.get("type", ""),
+                media_data.get("width", ""),
+                media_data.get("height", ""),
+                media_data.get("controls", False),
+                media_data.get("autoplay", False),
+                media_data.get("loop", False),
+            )
+
+    def add_resource(self, page_url: str, res: Dict[str, Any]):
+        with self._driver.session() as session:
+            session.execute_write(
+                self._merge_resource,
+                page_url,
+                res.get("url", ""),
+                res.get("method", ""),
+                res.get("resource_type", "")
+            )
+
+    # ---------------- Legacy methods for backward compatibility ---------------- #
+
+    def add_input(self, page_url: str, input_data: Dict[str, Any]):
+        """Legacy method - use add_input_field instead"""
+        self.add_input_field(page_url, input_data)
+
+    # ---------------- Utility / Summary methods ---------------- #
+
+    def get_summary(self, limit: int = 10) -> List[Dict[str, Any]]:
+        """
+        Returns a comprehensive summary of pages with all their linked elements,
+        resources, and interactive components.
+        """
+        with self._driver.session() as session:
+            result = session.run(
+                """
+                MATCH (p:Page)
+                OPTIONAL MATCH (p)-[:LINKS_TO]->(linked:Page)
+                OPTIONAL MATCH (p)-[:HAS_LINK]->(l:Link)
+                OPTIONAL MATCH (p)-[:HAS_BUTTON]->(b:Button)
+                OPTIONAL MATCH (p)-[:HAS_INPUT]->(i:InputField)
+                OPTIONAL MATCH (p)-[:HAS_TEXTAREA]->(t:Textarea)
+                OPTIONAL MATCH (p)-[:HAS_IMAGE]->(img:Image)
+                OPTIONAL MATCH (p)-[:USES_STYLESHEET]->(s:Stylesheet)
+                OPTIONAL MATCH (p)-[:USES_SCRIPT]->(scr:Script)
+                OPTIONAL MATCH (p)-[:USES_FONT]->(f:Font)
+                OPTIONAL MATCH (p)-[:HAS_FORM]->(form:Form)
+                OPTIONAL MATCH (p)-[:USES_MEDIA]->(m:MediaResource)
+                OPTIONAL MATCH (p)-[:USES_RESOURCE]->(r:Resource)
+                RETURN p.url AS page,
+                       collect(DISTINCT linked.url) AS linked_pages,
+                       collect(DISTINCT l) AS links,
+                       collect(DISTINCT b) AS buttons,
+                       collect(DISTINCT i) AS inputs,
+                       collect(DISTINCT t) AS textareas,
+                       collect(DISTINCT img) AS images,
+                       collect(DISTINCT s) AS stylesheets,
+                       collect(DISTINCT scr) AS scripts,
+                       collect(DISTINCT f) AS fonts,
+                       collect(DISTINCT form) AS forms,
+                       collect(DISTINCT m) AS media,
+                       collect(DISTINCT r) AS resources
+                LIMIT $limit
+                """,
+                limit=limit,
+            )
+            return [record.data() for record in result]
+
+    # ---------------- Enhanced Cypher queries ---------------- #
 
     @staticmethod
     def _merge_page(tx, url: str):
@@ -57,8 +219,9 @@ class Neo4jClient:
         tx.run(
             """
             MERGE (p:Page {url: $page_url})
-            MERGE (l:Link {href: $href, text: coalesce($text, ''), title: coalesce($title, '')})
-            MERGE (p)-[:CONTAINS]->(l)
+            MERGE (l:Link {href: $href})
+            SET l.text = coalesce($text, ''), l.title = coalesce($title, '')
+            MERGE (p)-[:HAS_LINK]->(l)
             """,
             page_url=page_url,
             href=href,
@@ -68,13 +231,12 @@ class Neo4jClient:
 
     @staticmethod
     def _merge_button(tx, page_url: str, text: str, button_id: str, name: str, btn_type: str):
-        # uid makes button unique per page
         tx.run(
             """
             MERGE (p:Page {url: $page_url})
             MERGE (b:Button {uid: $uid})
             SET b.text = $text, b.id = $button_id, b.name = $name, b.type = $btn_type
-            MERGE (p)-[:CONTAINS]->(b)
+            MERGE (p)-[:HAS_BUTTON]->(b)
             """,
             page_url=page_url,
             uid=f"{page_url}:::{button_id or text}",
@@ -85,16 +247,166 @@ class Neo4jClient:
         )
 
     @staticmethod
+    def _merge_input_field(tx, page_url: str, input_id: str, name: str, input_type: str, placeholder: str, required: bool, value: str):
+        tx.run(
+            """
+            MERGE (p:Page {url: $page_url})
+            MERGE (i:InputField {uid: $uid})
+            SET i.id = $input_id, i.name = $name, i.type = $input_type, i.placeholder = $placeholder, i.required = $required, i.value = $value
+            MERGE (p)-[:HAS_INPUT]->(i)
+            """,
+            page_url=page_url,
+            uid=f"{page_url}:::{input_id or name or placeholder}",
+            input_id=input_id,
+            name=name,
+            input_type=input_type,
+            placeholder=placeholder,
+            required=required,
+            value=value,
+        )
+
+    @staticmethod
+    def _merge_textarea(tx, page_url: str, ta_id: str, name: str, placeholder: str, rows: str, cols: str, required: bool):
+        tx.run(
+            """
+            MERGE (p:Page {url: $page_url})
+            MERGE (t:Textarea {uid: $uid})
+            SET t.id = $ta_id, t.name = $name, t.placeholder = $placeholder, t.rows = $rows, t.cols = $cols, t.required = $required
+            MERGE (p)-[:HAS_TEXTAREA]->(t)
+            """,
+            page_url=page_url,
+            uid=f"{page_url}:::{ta_id or name or placeholder}",
+            ta_id=ta_id,
+            name=name,
+            placeholder=placeholder,
+            rows=rows,
+            cols=cols,
+            required=required,
+        )
+
+    @staticmethod
     def _merge_image(tx, page_url: str, src: str, alt: str):
         tx.run(
             """
             MERGE (p:Page {url: $page_url})
-            MERGE (i:Image {src: $src, alt: $alt})
-            MERGE (p)-[:CONTAINS]->(i)
+            MERGE (i:Image {src: $src})
+            SET i.alt = $alt
+            MERGE (p)-[:HAS_IMAGE]->(i)
             """,
             page_url=page_url,
             src=src,
             alt=alt,
         )
 
+    @staticmethod
+    def _merge_stylesheet(tx, page_url: str, url: str, stylesheet_type: str, media: str, integrity: str, crossorigin: str, content: str):
+        tx.run(
+            """
+            MERGE (p:Page {url: $page_url})
+            MERGE (s:Stylesheet {url: $url})
+            SET s.type = $stylesheet_type, s.media = $media, s.integrity = $integrity, s.crossorigin = $crossorigin, s.content = $content
+            MERGE (p)-[:USES_STYLESHEET]->(s)
+            """,
+            page_url=page_url,
+            url=url,
+            stylesheet_type=stylesheet_type,
+            media=media,
+            integrity=integrity,
+            crossorigin=crossorigin,
+            content=content,
+        )
 
+    @staticmethod
+    def _merge_script(tx, page_url: str, url: str, script_type: str, async_flag: bool, defer_flag: bool, integrity: str, crossorigin: str, content: str):
+        tx.run(
+            """
+            MERGE (p:Page {url: $page_url})
+            MERGE (s:Script {url: $url})
+            SET s.type = $script_type, s.async = $async_flag, s.defer = $defer_flag, s.integrity = $integrity, s.crossorigin = $crossorigin, s.content = $content
+            MERGE (p)-[:USES_SCRIPT]->(s)
+            """,
+            page_url=page_url,
+            url=url,
+            script_type=script_type,
+            async_flag=async_flag,
+            defer_flag=defer_flag,
+            integrity=integrity,
+            crossorigin=crossorigin,
+            content=content,
+        )
+
+    @staticmethod
+    def _merge_font(tx, page_url: str, url: str, font_type: str, format_type: str, crossorigin: str):
+        tx.run(
+            """
+            MERGE (p:Page {url: $page_url})
+            MERGE (f:Font {url: $url})
+            SET f.type = $font_type, f.format = $format_type, f.crossorigin = $crossorigin
+            MERGE (p)-[:USES_FONT]->(f)
+            """,
+            page_url=page_url,
+            url=url,
+            font_type=font_type,
+            format_type=format_type,
+            crossorigin=crossorigin,
+        )
+
+    @staticmethod
+    def _merge_form(tx, page_url: str, form_id: str, name: str, action: str, method: str, enctype: str, target: str):
+        tx.run(
+            """
+            MERGE (p:Page {url: $page_url})
+            MERGE (f:Form {uid: $uid})
+            SET f.id = $form_id, f.name = $name, f.action = $action, f.method = $method, f.enctype = $enctype, f.target = $target
+            MERGE (p)-[:HAS_FORM]->(f)
+            """,
+            page_url=page_url,
+            uid=f"{page_url}:::{form_id or name}",
+            form_id=form_id,
+            name=name,
+            action=action,
+            method=method,
+            enctype=enctype,
+            target=target,
+        )
+
+    @staticmethod
+    def _merge_media_resource(tx, page_url: str, url: str, media_type: str, width: str, height: str, controls: bool, autoplay: bool, loop: bool):
+        tx.run(
+            """
+            MERGE (p:Page {url: $page_url})
+            MERGE (m:MediaResource {url: $url})
+            SET m.type = $media_type, m.width = $width, m.height = $height, m.controls = $controls, m.autoplay = $autoplay, m.loop = $loop
+            MERGE (p)-[:USES_MEDIA]->(m)
+            """,
+            page_url=page_url,
+            url=url,
+            media_type=media_type,
+            width=width,
+            height=height,
+            controls=controls,
+            autoplay=autoplay,
+            loop=loop,
+        )
+
+    @staticmethod
+    def _merge_resource(tx, page_url: str, res_url: str, method: str, res_type: str):
+        tx.run(
+            """
+            MERGE (p:Page {url: $page_url})
+            MERGE (r:Resource {url: $res_url})
+            SET r.method = $method, r.type = $res_type
+            MERGE (p)-[:USES_RESOURCE {type: $res_type}]->(r)
+            """,
+            page_url=page_url,
+            res_url=res_url,
+            method=method,
+            res_type=res_type,
+        )
+
+    # ---------------- Legacy methods for backward compatibility ---------------- #
+
+    @staticmethod
+    def _merge_input(tx, page_url: str, input_id: str, name: str, input_type: str, placeholder: str):
+        """Legacy method - use _merge_input_field instead"""
+        Neo4jClient._merge_input_field(tx, page_url, input_id, name, input_type, placeholder, False, "")
