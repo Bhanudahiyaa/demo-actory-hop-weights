@@ -2,6 +2,7 @@ import os
 import asyncio
 import argparse
 from typing import List, Optional
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 from crawl4ai import AsyncWebCrawler
@@ -67,7 +68,10 @@ async def crawl_and_store(
             # LINKS - Enhanced link extraction
             internal = (result.links or {}).get("internal", [])
             external = (result.links or {}).get("external", [])
-            for link in internal + external:
+            
+            # Only process external links if include_external is True
+            links_to_process = internal + (external if include_external else [])
+            for link in links_to_process:
                 href = link.get("href") or ""
                 text = link.get("text") or ""
                 title = link.get("title") or ""
@@ -77,9 +81,15 @@ async def crawl_and_store(
                     neo4j.add_link(page_url, href, text, title)
                 # link to page if href is a page we visited as well later (optional: we can also create LINK_TO regardless)
                 # We'll create LINKS_TO edges when we see the linked page or preemptively if same-domain
+                # Only create page links for internal URLs or if external crawling is enabled
                 if href.startswith("http"):
-                    if neo4j:
-                        neo4j.link_pages(page_url, href)
+                    # Check if this is an internal link (same domain) or if external crawling is enabled
+                    current_domain = urlparse(page_url).netloc
+                    link_domain = urlparse(href).netloc
+                    
+                    if include_external or current_domain == link_domain:
+                        if neo4j:
+                            neo4j.link_pages(page_url, href)
 
             # Store all extracted DOM features in Neo4j
             if neo4j:
@@ -142,6 +152,27 @@ async def crawl_and_store(
             print()
 
 
+def clear_database_only():
+    """Clear the Neo4j database without running any scraping."""
+    load_dotenv()
+    
+    neo4j_uri = os.getenv("NEO4J_URI", "bolt://localhost:7687")
+    neo4j_user = os.getenv("NEO4J_USER", "neo4j")
+    neo4j_pwd = os.getenv("NEO4J_PASSWORD", "neo4j")
+    
+    print("🗑️  Connecting to Neo4j database...")
+    client = Neo4jClient()
+    
+    try:
+        print("🗑️  Clearing all data from database...")
+        client.clear_database()
+        print("✅ Database cleared successfully!")
+    except Exception as e:
+        print(f"❌ Error clearing database: {e}")
+    finally:
+        client.close()
+
+
 def main():
     load_dotenv()
 
@@ -160,13 +191,30 @@ def main():
         action="store_true",
         help="Run crawl and extraction without writing to Neo4j",
     )
+    parser.add_argument(
+        "--clear-db",
+        action="store_true",
+        help="Clear all data from the Neo4j database before starting",
+    )
+    parser.add_argument(
+        "--clear-only",
+        action="store_true",
+        help="Only clear the database without running any scraping",
+    )
     args = parser.parse_args()
 
-    neo4j_uri = os.getenv("NEO4J_URI", "bolt://localhost:7687")
-    neo4j_user = os.getenv("NEO4J_USER", "neo4j")
-    neo4j_pwd = os.getenv("NEO4J_PASSWORD", "neo4j")
+    # Handle clear-only option
+    if args.clear_only:
+        clear_database_only()
+        return
 
     client: Optional[Neo4jClient] = None if args.dry_run else Neo4jClient()
+    
+    # Clear database if requested
+    if client and args.clear_db:
+        print("🗑️  Clearing database...")
+        client.clear_database()
+    
     try:
         asyncio.run(crawl_and_store(args.url, args.depth, args.max_pages, args.include_external, client))
     finally:
@@ -176,5 +224,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-

@@ -196,6 +196,63 @@ class Neo4jClient:
             )
             return [record.data() for record in result]
 
+    def get_hop1_neighborhood(self, page_url: str) -> Dict[str, Any]:
+        """
+        Get hop-1 neighborhood information for a specific page.
+        Returns neighbors with their metadata and crawl planning information.
+        """
+        with self._driver.session() as session:
+            # First, get all pages that this page links to (via Link nodes)
+            result = session.run(
+                """
+                MATCH (source:Page {url: $page_url})-[:HAS_LINK]->(link:Link)
+                WITH link.href AS target_url, link.text AS link_text
+                OPTIONAL MATCH (target:Page {url: target_url})
+                OPTIONAL MATCH (target)-[:HAS_FORM]->(form:Form)
+                OPTIONAL MATCH (target)-[:HAS_BUTTON]->(button:Button)
+                OPTIONAL MATCH (target)-[:HAS_INPUT]->(input:InputField)
+                OPTIONAL MATCH (target)-[:HAS_IMAGE]->(image:Image)
+                OPTIONAL MATCH (target)-[:USES_SCRIPT]->(script:Script)
+                OPTIONAL MATCH (target)-[:USES_STYLESHEET]->(stylesheet:Stylesheet)
+                OPTIONAL MATCH (target)-[:HAS_LINK]->(target_link:Link)
+                OPTIONAL MATCH (target)-[:USES_MEDIA]->(media:MediaResource)
+                RETURN target_url AS url,
+                       link_text AS link_text,
+                       target.url IS NOT NULL AS page_exists,
+                       count(DISTINCT form) AS formCount,
+                       count(DISTINCT button) AS buttonCount,
+                       count(DISTINCT input) AS inputCount,
+                       count(DISTINCT image) AS imageCount,
+                       count(DISTINCT script) AS scriptCount,
+                       count(DISTINCT stylesheet) AS stylesheetCount,
+                       count(DISTINCT target_link) AS linkCount,
+                       count(DISTINCT media) AS mediaCount
+                ORDER BY page_exists DESC, formCount DESC, scriptCount DESC, buttonCount DESC
+                """,
+                page_url=page_url,
+            )
+            neighbors = [record.data() for record in result]
+            
+            # Filter out None values
+            neighbors = [n for n in neighbors if n['url'] is not None]
+            
+            # Calculate total counts for crawl planning
+            total_forms = sum(n['formCount'] for n in neighbors)
+            total_scripts = sum(n['scriptCount'] for n in neighbors)
+            total_interactive = sum(n['buttonCount'] + n['inputCount'] for n in neighbors)
+            
+            return {
+                'source_url': page_url,
+                'neighbors': neighbors,
+                'summary': {
+                    'total_neighbors': len(neighbors),
+                    'total_forms': total_forms,
+                    'total_scripts': total_scripts,
+                    'total_interactive': total_interactive,
+                    'avg_weight': 0.0  # Default weight since we don't have weight property
+                }
+            }
+
     # ---------------- Enhanced Cypher queries ---------------- #
 
     @staticmethod
@@ -410,3 +467,16 @@ class Neo4jClient:
     def _merge_input(tx, page_url: str, input_id: str, name: str, input_type: str, placeholder: str):
         """Legacy method - use _merge_input_field instead"""
         Neo4jClient._merge_input_field(tx, page_url, input_id, name, input_type, placeholder, False, "")
+
+    # ---------------- Database Management Methods ---------------- #
+
+    def clear_database(self):
+        """Clear all data from the database."""
+        with self._driver.session() as session:
+            session.execute_write(self._clear_all_data)
+            print("🗑️  Database cleared successfully!")
+
+    @staticmethod
+    def _clear_all_data(tx):
+        """Clear all nodes and relationships from the database."""
+        tx.run("MATCH (n) DETACH DELETE n")
