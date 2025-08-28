@@ -1,7 +1,8 @@
 import os
 from dotenv import load_dotenv
 from neo4j import GraphDatabase
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Literal
+from datetime import datetime
 
 load_dotenv()
 
@@ -12,6 +13,9 @@ class Neo4jClient:
         user = os.getenv("NEO4J_USER")
         password = os.getenv("NEO4J_PASSWORD")  # change if your password differs
 
+        if not uri or not user or not password:
+            raise ValueError("Missing Neo4j connection parameters in environment variables")
+        
         self._driver = GraphDatabase.driver(uri, auth=(user, password))
 
     def close(self):
@@ -20,9 +24,123 @@ class Neo4jClient:
 
     # ---------------- Enhanced methods for comprehensive DOM features ---------------- #
 
-    def upsert_page(self, url: str):
+    def upsert_page(self, url: str, title: Optional[str] = None, weight: Optional[float] = None):
+        """Create or update a page node with metadata."""
         with self._driver.session() as session:
-            session.execute_write(self._merge_page, url)
+            session.execute_write(self._merge_page_with_metadata, url, title, weight)
+
+    def mark_page_visited(self, url: str):
+        """Mark a page as visited and set lastCrawledAt timestamp."""
+        with self._driver.session() as session:
+            session.execute_write(self._mark_visited, url)
+
+    def get_neighbors_hop1(self, url: str, direction: Literal["out", "in", "both"] = "out", 
+                          limit: int = 25, exclude_visited: bool = True) -> List[Dict]:
+        """
+        Fetch immediate neighbors ordered by weight DESC, url ASC.
+        Optionally enrich with feature counts and exclude visited pages.
+        """
+        with self._driver.session() as session:
+            result = session.run(
+                self._get_neighbors_query(direction, exclude_visited),
+                url=url,
+                limit=limit
+            )
+            neighbors = [record.data() for record in result]
+            
+            # Enrich with feature counts
+            enriched_neighbors = []
+            for neighbor in neighbors:
+                neighbor_url = neighbor['url']
+                feature_counts = self._get_feature_counts(neighbor_url)
+                enriched_neighbors.append({
+                    **neighbor,
+                    **feature_counts
+                })
+            
+            return enriched_neighbors
+
+    def _get_feature_counts(self, url: str) -> Dict[str, int]:
+        """Get feature counts for a specific page."""
+        with self._driver.session() as session:
+            result = session.run(
+                """
+                MATCH (p:Page {url: $url})
+                OPTIONAL MATCH (p)-[:HAS_FORM]->(form:Form)
+                OPTIONAL MATCH (p)-[:HAS_BUTTON]->(button:Button)
+                OPTIONAL MATCH (p)-[:HAS_INPUT]->(input:InputField)
+                OPTIONAL MATCH (p)-[:HAS_IMAGE]->(image:Image)
+                OPTIONAL MATCH (p)-[:USES_SCRIPT]->(script:Script)
+                OPTIONAL MATCH (p)-[:HAS_LINK]->(link:Link)
+                OPTIONAL MATCH (p)-[:USES_STYLESHEET]->(stylesheet:Stylesheet)
+                OPTIONAL MATCH (p)-[:USES_MEDIA]->(media:MediaResource)
+                RETURN count(DISTINCT form) AS formCount,
+                       count(DISTINCT button) AS buttonCount,
+                       count(DISTINCT input) AS inputCount,
+                       count(DISTINCT image) AS imageCount,
+                       count(DISTINCT script) AS scriptCount,
+                       count(DISTINCT link) AS linkCount,
+                       count(DISTINCT stylesheet) AS stylesheetCount,
+                       count(DISTINCT media) AS mediaCount
+                """,
+                url=url
+            )
+            record = result.single()
+            if record:
+                return record.data()
+            return {
+                'formCount': 0, 'buttonCount': 0, 'inputCount': 0, 'imageCount': 0,
+                'scriptCount': 0, 'linkCount': 0, 'stylesheetCount': 0, 'mediaCount': 0
+            }
+
+    def _get_neighbors_query(self, direction: str, exclude_visited: bool) -> str:
+        """Generate the appropriate Cypher query based on direction and visited filter."""
+        visited_filter = "AND NOT p.visited" if exclude_visited else ""
+        
+        if direction == "out":
+            return f"""
+                MATCH (start:Page {{url: $url}})-[:LINKS_TO]->(p:Page)
+                WHERE p.url IS NOT NULL {visited_filter}
+                RETURN p.url AS url, 
+                       coalesce(p.title, '') AS title,
+                       coalesce(p.weight, 0.0) AS weight,
+                       coalesce(p.visited, false) AS visited,
+                       p.lastCrawledAt AS lastCrawledAt
+                ORDER BY p.weight DESC, p.url ASC
+                LIMIT $limit
+            """
+        elif direction == "in":
+            return f"""
+                MATCH (p:Page)-[:LINKS_TO]->(start:Page {{url: $url}})
+                WHERE p.url IS NOT NULL {visited_filter}
+                RETURN p.url AS url, 
+                       coalesce(p.title, '') AS title,
+                       coalesce(p.weight, 0.0) AS weight,
+                       coalesce(p.visited, false) AS visited,
+                       p.lastCrawledAt AS lastCrawledAt
+                ORDER BY p.weight DESC, p.url ASC
+                LIMIT $limit
+            """
+        else:  # both
+            return f"""
+                MATCH (start:Page {{url: $url}})-[:LINKS_TO]->(p:Page)
+                WHERE p.url IS NOT NULL {visited_filter}
+                RETURN p.url AS url, 
+                       coalesce(p.title, '') AS title,
+                       coalesce(p.weight, 0.0) AS weight,
+                       coalesce(p.visited, false) AS visited,
+                       p.lastCrawledAt AS lastCrawledAt
+                UNION
+                MATCH (p:Page)-[:LINKS_TO]->(start:Page {{url: $url}})
+                WHERE p.url IS NOT NULL {visited_filter}
+                RETURN p.url AS url, 
+                       coalesce(p.title, '') AS title,
+                       coalesce(p.weight, 0.0) AS weight,
+                       coalesce(p.visited, false) AS visited,
+                       p.lastCrawledAt AS lastCrawledAt
+                ORDER BY weight DESC, url ASC
+                LIMIT $limit
+            """
 
     def link_pages(self, from_url: str, to_url: str):
         with self._driver.session() as session:
@@ -467,6 +585,30 @@ class Neo4jClient:
     def _merge_input(tx, page_url: str, input_id: str, name: str, input_type: str, placeholder: str):
         """Legacy method - use _merge_input_field instead"""
         Neo4jClient._merge_input_field(tx, page_url, input_id, name, input_type, placeholder, False, "")
+
+    @staticmethod
+    def _merge_page_with_metadata(tx, url: str, title: Optional[str], weight: Optional[float]):
+        """Create or update page with metadata."""
+        tx.run(
+            """
+            MERGE (p:Page {url: $url})
+            SET p.title = coalesce($title, p.title),
+                p.weight = coalesce($weight, p.weight),
+                p.visited = coalesce(p.visited, false)
+            """,
+            url=url, title=title, weight=weight
+        )
+
+    @staticmethod
+    def _mark_visited(tx, url: str):
+        """Mark page as visited with timestamp."""
+        tx.run(
+            """
+            MATCH (p:Page {url: $url})
+            SET p.visited = true, p.lastCrawledAt = datetime()
+            """,
+            url=url
+        )
 
     # ---------------- Database Management Methods ---------------- #
 
