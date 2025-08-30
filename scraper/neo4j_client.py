@@ -29,10 +29,20 @@ class Neo4jClient:
         with self._driver.session() as session:
             session.execute_write(self._merge_page_with_metadata, url, title, weight)
 
+    def update_page_features(self, url: str, feature_counts: Dict[str, int]):
+        """Update a page node with feature count properties."""
+        with self._driver.session() as session:
+            session.execute_write(self._update_page_features, url, feature_counts)
+
     def mark_page_visited(self, url: str):
         """Mark a page as visited and set lastCrawledAt timestamp."""
         with self._driver.session() as session:
             session.execute_write(self._mark_visited, url)
+    
+    def mark_page_discovered(self, url: str):
+        """Mark a page as discovered but not yet visited."""
+        with self._driver.session() as session:
+            session.execute_write(self._mark_discovered, url)
 
     def get_neighbors_hop1(self, url: str, direction: Literal["out", "in", "both"] = "out", 
                           limit: int = 25, exclude_visited: bool = True) -> List[Dict]:
@@ -600,6 +610,25 @@ class Neo4jClient:
         )
 
     @staticmethod
+    def _update_page_features(tx, url: str, feature_counts: Dict[str, int]):
+        """Update a page node with feature count properties."""
+        tx.run(
+            """
+            MERGE (p:Page {url: $url})
+            SET p.formCount = $formCount,
+                p.buttonCount = $buttonCount,
+                p.inputCount = $inputCount,
+                p.imageCount = $imageCount,
+                p.scriptCount = $scriptCount,
+                p.linkCount = $linkCount,
+                p.stylesheetCount = $stylesheetCount,
+                p.mediaCount = $mediaCount
+            """,
+            url=url,
+            **feature_counts
+        )
+
+    @staticmethod
     def _mark_visited(tx, url: str):
         """Mark page as visited with timestamp."""
         tx.run(
@@ -609,8 +638,27 @@ class Neo4jClient:
             """,
             url=url
         )
+    
+    @staticmethod
+    def _mark_discovered(tx, url: str):
+        """Mark page as discovered but not yet visited."""
+        tx.run(
+            """
+            MATCH (p:Page {url: $url})
+            SET p.visited = false, p.discovered = true
+            """,
+            url=url
+        )
 
     # ---------------- Database Management Methods ---------------- #
+
+    def run_query(self, query: str, parameters: Dict[str, Any] = None) -> List[Dict[str, Any]]:
+        """Run a custom Cypher query and return results."""
+        with self._driver.session() as session:
+            if parameters is None:
+                parameters = {}
+            result = session.run(query, **parameters)
+            return [record.data() for record in result]
 
     def clear_database(self):
         """Clear all data from the database."""
