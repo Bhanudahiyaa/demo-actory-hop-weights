@@ -10,23 +10,7 @@ A clean, organized web scraping system powered by **GPT-OSS-20B** for intelligen
 - **⚡ Performance Optimized**: Clean architecture for maximum efficiency
 - **🎯 Business Intelligence**: Content classification and conversion analysis
 
-## 🏗️ **Clean Architecture**
 
-```
-actory-ai-scrape-bhanu/
-├── main.py                 # 🚀 Main entry point
-├── scraper/               # 🧹 Core modules
-│   ├── enhanced_run.py    # 📊 LLM-enhanced scraping
-│   ├── planningagent.py   # 🧠 Intelligent navigation
-│   ├── llm_extractor.py   # 🤖 Qwen3 LLM integration
-│   ├── neo4j_client.py    # 🗄️ Database interface
-│   ├── extractors.py      # 🔍 DOM feature extraction
-│   ├── plan.py           # 📋 Navigation planning
-│   └── crawl_agent.py    # 🤖 Autonomous crawling
-├── tests/                 # 🧪 Test suite
-├── requirements.txt       # 📦 Dependencies
-└── README.md             # 📚 This file
-```
 
 ## 🚀 **Quick Start**
 
